@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Copyright 2013 Sangman Kim
+
 // TODO(rsc):
 //	More precise error handling.
 //	Presence functionality.
@@ -48,7 +50,7 @@ type Client struct {
 // NewClient creates a new connection to a host given as "hostname" or "hostname:port".
 // If host is not specified, the  DNS SRV should be used to find the host from the domainpart of the JID.
 // Default the port to 5222.
-func NewClient(host, user, passwd string) (*Client, error) {
+func NewClient(host, user, passwd, status string, show ShowType) (*Client, error) {
 	addr := host
 
 	if strings.TrimSpace(host) == "" {
@@ -106,7 +108,7 @@ func NewClient(host, user, passwd string) (*Client, error) {
 
 	client := new(Client)
 	client.tls = tlsconn
-	if err := client.init(user, passwd); err != nil {
+	if err := client.init(user, passwd, status, show); err != nil {
 		client.Close()
 		return nil, err
 	}
@@ -117,7 +119,7 @@ func (c *Client) Close() error {
 	return c.tls.Close()
 }
 
-func (c *Client) init(user, passwd string) error {
+func (c *Client) init(user, passwd, status string, show ShowType) error {
 	// For debugging: the following causes the plaintext of the connection to be duplicated to stdout.
 	//c.p = xml.NewDecoder(tee{c.tls, os.Stdout})
 	c.p = xml.NewDecoder(c.tls)
@@ -212,45 +214,132 @@ func (c *Client) init(user, passwd string) error {
 	c.jid = iq.Bind.Jid // our local id
 
 	// We're connected and can now receive and send messages.
-	fmt.Fprintf(c.tls, "<presence xml:lang='en'><show>xa</show><status>I for one welcome our new codebot overlords.</status></presence>")
+	c.Send(Presence{"", "", "", show, "status"})
 	return nil
+}
+
+const (
+	MSG_CHAT = iota
+	MSG_ERROR
+	MSG_GROUPCHAT
+	MSG_HEADLINE
+	msg_last
+)
+
+type MsgType int8
+
+var msgtype2str = []string{"chat", "error", "groupchat", "headline"};
+var str2msgtype = map[string]MsgType{
+	"chat" : MSG_CHAT,
+	"error": MSG_ERROR,
+	"groupchat": MSG_GROUPCHAT,
+	"headline" : MSG_HEADLINE,
 }
 
 type Chat struct {
 	Remote string
-	Type   string
+	Type   MsgType
 	Text   string
 }
+
+func (msgType MsgType) ToString() string {
+	if msgType >= msg_last {
+		log.Fatalf("msg type too large %d", msgType)
+	}
+	
+	return msgtype2str[msgType]
+}
+
+const (
+	STATUS_NONE = iota
+	STATUS_AWAY 
+	STATUS_CHAT
+	STATUS_DND /* do not disturb */
+	STATUS_XA  /* eXtended Away */
+	status_last
+)
+
+type ShowType int8
 
 type Presence struct {
 	From string
 	To   string
 	Type string
-	Show string
+	Show ShowType
+	Status string
+}
+
+var status2str = []string{"", "away", "chat", "dnd", "xa"}
+var str2status = map[string]ShowType{
+	"":STATUS_NONE,
+	"away":STATUS_AWAY, "chat":STATUS_CHAT,
+	"dnd":STATUS_DND, "xa":STATUS_XA, }
+
+func (showType ShowType) ToString() string {
+	if showType >= status_last {
+		log.Fatalf("status too large %d", showType)
+	}
+	
+	return status2str[showType]
+}
+
+type XmppMsg interface {
+	getStanza() string
+}
+
+func (chat Chat) getStanza() string {
+	return fmt.Sprintf("<message to='%s' type='%s' xml:lang='en'><body>%s</body></message>", xmlEscape(chat.Remote), chat.Type.ToString(), xmlEscape(chat.Text))
+}
+
+/* only supports broadcasting with <show> option */
+func (presence Presence) getStanza() string {
+	showStr := ""
+	
+	if presence.Show != STATUS_NONE {
+		showStr = fmt.Sprintf("<show>%s</show>", presence.Show.ToString())
+	}
+	
+	return fmt.Sprintf("<presence xml:lang='en'>%s<status>%s</status></presence>", showStr, xmlEscape(presence.Status))
 }
 
 // Recv wait next token of chat.
 func (c *Client) Recv() (event interface{}, err error) {
 	for {
-		_, val, err := next(c.p)
+		name, val, err := next(c.p)
 		if err != nil {
 			return Chat{}, err
 		}
+		if val == nil {
+			return nil, fmt.Errorf("Recv unhandled stanza. name: %s", name)
+		}
+		
 		switch v := val.(type) {
 		case *clientMessage:
-			return Chat{v.From, v.Type, v.Body}, nil
+			msgType, ok := str2msgtype[v.Type]
+			if !ok {
+				return nil, fmt.Errorf("Invalid Msg type -  '%s'", v.Type)
+			}
+			return Chat{v.From, msgType, v.Body}, nil
 		case *clientPresence:
-			return Presence{v.From, v.To, v.Type, v.Show}, nil
+			showType, ok := str2status[v.Show]
+			if !ok {
+				return nil, fmt.Errorf("Invalid Show type - '%s'", v.Show)
+			}
+			return Presence{v.From, v.To, v.Type, showType, v.Status}, nil
 		}
 	}
 	panic("unreachable")
 }
 
-// Send sends message text.
-func (c *Client) Send(chat Chat) {
-	fmt.Fprintf(c.tls, "<message to='%s' type='%s' xml:lang='en'>"+
-		"<body>%s</body></message>",
-		xmlEscape(chat.Remote), xmlEscape(chat.Type), xmlEscape(chat.Text))
+// Send sends message/presence stanza
+func (c *Client) Send(msg XmppMsg) error {
+	stanza := msg.getStanza()
+	n, err := fmt.Fprintf(c.tls, stanza)
+	if n < len(stanza) {
+		return fmt.Errorf("Send: Insufficient write.")
+	}
+	
+	return err
 }
 
 // RFC 3920  C.1  Streams name space
