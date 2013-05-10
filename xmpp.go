@@ -333,13 +333,21 @@ func (c *Client) Recv() (event interface{}, err error) {
 
 // Send sends message/presence stanza
 func (c *Client) Send(msg XmppMsg) error {
+    var err error
+
 	stanza := msg.getStanza()
-	n, err := fmt.Fprintf(c.tls, stanza)
-	if n < len(stanza) {
-		return fmt.Errorf("Send: Insufficient write.")
-	}
+	n := len(stanza)
+	i := 0
 	
-	return err
+	/* preventing partial send unless there is an error */
+	for i < n {
+		n, err = fmt.Fprintf(c.tls, stanza[i:])
+		if err != nil {
+			return err
+		}
+		i += n
+	}
+	return nil
 }
 
 // RFC 3920  C.1  Streams name space
