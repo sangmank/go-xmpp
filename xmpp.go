@@ -219,7 +219,7 @@ func (c *Client) init(user, passwd, status string, show ShowType) error {
 }
 
 const (
-	MSG_CHAT = iota
+	MSG_CHAT MsgType = iota
 	MSG_ERROR
 	MSG_GROUPCHAT
 	MSG_HEADLINE
@@ -251,7 +251,7 @@ func (msgType MsgType) ToString() string {
 }
 
 const (
-	STATUS_NONE = iota
+	STATUS_NONE ShowType = iota
 	STATUS_AWAY 
 	STATUS_CHAT
 	STATUS_DND /* do not disturb */
@@ -326,6 +326,30 @@ func (c *Client) Recv() (event interface{}, err error) {
 				return nil, fmt.Errorf("Invalid Show type - '%s'", v.Show)
 			}
 			return Presence{v.From, v.To, v.Type, showType, v.Status}, nil
+		case *streamFeatures:
+			log.Printf("streamFeatures")
+		case *streamError:
+			log.Printf("streamError")
+		case *tlsStartTLS:
+			log.Printf("tlsStartTLS")
+		case *tlsProceed:
+			log.Printf("tlsProceed")
+		case *tlsFailure:
+			log.Printf("tlsFailure")
+		case *saslMechanisms:
+			log.Printf("saslMechanisms")
+		case *saslAbort:
+			log.Printf("saslAbort")
+		case *saslSuccess:
+			log.Printf("saslSuccess")
+		case *saslFailure:
+			log.Printf("saslFailure")
+		case *bindBind:
+			log.Printf("bindBind")
+		case *clientIQ:
+			log.Printf("clientIQ")
+		case *clientError:
+			log.Printf("clientError")
 		}
 	}
 	panic("unreachable")
@@ -560,6 +584,7 @@ func xmlEscape(s string) string {
 			b.WriteByte(c)
 		}
 	}
+	
 	return b.String()
 }
 
